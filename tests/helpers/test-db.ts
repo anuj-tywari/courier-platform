@@ -1,7 +1,7 @@
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://localhost:5432/courier_platform_test";
 process.env.NODE_ENV = "test";
-process.env.ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "test-admin-token";
+process.env.ADMIN_API_TOKEN = "test-admin-token";
 
 export async function resetDb() {
   const { pool, ready } = await import("../../src/db/client");
