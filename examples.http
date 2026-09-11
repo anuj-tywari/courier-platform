@@ -1,0 +1,128 @@
+### Multi-Courier Integration Platform — curl examples
+### Base URL assumed: http://localhost:3000
+
+### List supported couriers
+curl -s http://localhost:3000/api/v1/couriers | jq
+
+### Health check
+curl -s http://localhost:3000/health | jq
+
+### Create an order (MockCourier — no live credentials needed)
+curl -s -X POST http://localhost:3000/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "order_id": "ORD-1001",
+    "courier_partner": "mockcourier",
+    "pickup_address": {"name":"Warehouse A","phone":"9876543210","email":"warehouse@example.com","line1":"Plot 12, MIDC","city":"Pune","state":"MH","pincode":"411001"},
+    "delivery_address": {"name":"Anuj","phone":"9123456780","email":"anuj@example.com","line1":"221B Baker St","city":"Mumbai","state":"MH","pincode":"400001"},
+    "package": {"weightKg": 1.2, "declaredValue": 999},
+    "payment_mode": "PREPAID"
+  }' | jq
+
+### Create an order (UrbaneBolt, live UAT -- credentials + customer code set in /admin; Gurugram -> Delhi are serviceable pincodes, addresses must be >= 10 chars)
+curl -s -X POST http://localhost:3000/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "order_id": "ORD-1002",
+    "courier_partner": "urbanebolt",
+    "pickup_address": {"name":"Acme Warehouse","phone":"9876543210","email":"ops@acme.test","line1":"Plot 12, Udyog Vihar Phase 1","city":"Gurugram","state":"Haryana","pincode":"122001"},
+    "delivery_address": {"name":"Ravi Kumar","phone":"9123456780","email":"ravi@example.test","line1":"12 Janpath Road, Connaught Place","city":"New Delhi","state":"Delhi","pincode":"110011"},
+    "package": {"weightKg": 1.2, "declaredValue": 999, "description": "T-shirt"},
+    "payment_mode": "PREPAID"
+  }' | jq
+
+### Resubmitting the same order_id is a no-op (idempotency)
+curl -s -X POST http://localhost:3000/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"ORD-1001","courier_partner":"mockcourier","pickup_address":{"name":"Warehouse A","phone":"9876543210","line1":"Plot 12, MIDC","city":"Pune","state":"MH","pincode":"411001"},"delivery_address":{"name":"Anuj","phone":"9123456780","line1":"221B Baker St","city":"Mumbai","state":"MH","pincode":"400001"},"package":{"weightKg":1.2,"declaredValue":999}}' | jq
+
+### Track a shipment
+curl -s http://localhost:3000/api/v1/orders/ORD-1001/track | jq
+
+### Cancel a shipment
+curl -s -X POST http://localhost:3000/api/v1/orders/ORD-1001/cancel | jq
+
+### Unknown courier_partner -> 400 with supported list
+curl -s -X POST http://localhost:3000/api/v1/orders \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"ORD-X","courier_partner":"dhl","pickup_address":{"name":"a","phone":"9876543210","line1":"a","city":"a","state":"a","pincode":"1234"},"delivery_address":{"name":"a","phone":"9876543210","line1":"a","city":"a","state":"a","pincode":"1234"},"package":{"weightKg":1,"declaredValue":1}}' | jq
+
+### Malformed body -> 400 with field-level errors
+curl -s -X POST http://localhost:3000/api/v1/orders -H "Content-Type: application/json" -d '{"order_id":"ORD-BAD"}' | jq
+
+### Bulk create (mixed couriers, up to 100 orders) -> 202 + batch_id
+curl -s -X POST http://localhost:3000/api/v1/orders/bulk \
+  -H "Content-Type: application/json" \
+  -d '{
+    "orders": [
+      {"order_id":"BULK-001","courier_partner":"mockcourier","pickup_address":{"name":"WH","phone":"9876543210","line1":"Plot 1","city":"Pune","state":"MH","pincode":"411001"},"delivery_address":{"name":"Cust","phone":"9123456780","line1":"Addr","city":"Mumbai","state":"MH","pincode":"400001"},"package":{"weightKg":1,"declaredValue":500}},
+      {"order_id":"BULK-002","courier_partner":"urbanebolt","pickup_address":{"name":"Acme Warehouse","phone":"9876543210","email":"ops@acme.test","line1":"Plot 12, Udyog Vihar Phase 1","city":"Gurugram","state":"Haryana","pincode":"122001"},"delivery_address":{"name":"Ravi Kumar","phone":"9123456780","email":"ravi@example.test","line1":"12 Janpath Road, Connaught Place","city":"New Delhi","state":"Delhi","pincode":"110011"},"package":{"weightKg":1,"declaredValue":500}}
+    ]
+  }' | jq
+
+### Poll a batch's progress/results (replace <batch_id>)
+curl -s http://localhost:3000/api/v1/orders/bulk/<batch_id> | jq
+
+### ===== Admin API (requires ADMIN_API_TOKEN from .env) =====
+### Also usable via the browser UI at http://localhost:3000/admin
+
+### List all couriers (secrets masked)
+curl -s http://localhost:3000/api/v1/admin/couriers \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" | jq
+
+### Disable a courier
+curl -s -X PATCH http://localhost:3000/api/v1/admin/couriers/mockcourier/enable \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled": false}' | jq
+
+### Bulk activate/deactivate multiple couriers at once
+curl -s -X POST http://localhost:3000/api/v1/admin/couriers/bulk-enable \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ids": ["mockcourier", "urbanebolt"], "enabled": true}' | jq
+
+### Register a brand-new courier with zero code (see README "Demo: add a courier with zero code"
+### for a runnable fixture target at scripts/demo-courier-server.ts)
+curl -s -X POST http://localhost:3000/api/v1/admin/couriers \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "id": "fixturecourier",
+    "display_name": "Fixture Courier",
+    "config": {
+      "base_url": "http://127.0.0.1:PORT",
+      "auth": {"type": "api_key_header", "header_name": "X-Api-Key", "api_key": "fixture-secret-key"},
+      "endpoints": {
+        "create": {"path": "/shipments", "method": "POST", "body_template": {"ref": "{{order_id}}", "weight": "{{package.weightKg}}"}, "response": {"courier_order_id_path": "id", "awb_path": "tracking", "status_path": "state"}, "status_map": {"new": "CREATED"}},
+        "track": {"path": "/shipments/{{courier_order_id}}", "method": "GET", "response": {"status_path": "state"}, "status_map": {"in_transit": "IN_TRANSIT", "voided": "CANCELLED"}},
+        "cancel": {"path": "/shipments/{{courier_order_id}}/void", "method": "POST", "response": {}}
+      }
+    }
+  }' | jq
+
+### Add (or replace) one endpoint at a time -- what the admin UI's Endpoints tab does
+curl -s -X PUT http://localhost:3000/api/v1/admin/couriers/fixturecourier/endpoints/track \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"path": "/shipments/{{courier_order_id}}", "method": "GET", "response": {"status_path": "state"}}' | jq
+
+### Remove one endpoint (calls that need it then fail with COURIER_MISCONFIGURED)
+curl -s -X DELETE http://localhost:3000/api/v1/admin/couriers/fixturecourier/endpoints/cancel \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" | jq
+
+
+### Test a courier config's connectivity before saving
+curl -s -X POST http://localhost:3000/api/v1/admin/couriers/test \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"config": {"base_url": "http://127.0.0.1:PORT", "auth": {"type": "none"}, "endpoints": {"create": {"path": "/x", "method": "POST", "response": {}}, "track": {"path": "/x", "method": "GET", "response": {}}, "cancel": {"path": "/x", "method": "POST", "response": {}}}, "status_map": {}}}' | jq
+
+### Update a coded adapter's credentials (config shape comes from its own schema; see `fields` in GET)
+curl -s -X PUT http://localhost:3000/api/v1/admin/couriers/urbanebolt \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"display_name": "UrbaneBolt", "config": {"base_url": "https://uat.urbanebolt.in/api/v1", "username": "me", "password": "secret", "customer_code": "CUST01", "default_service_type": "SDD", "default_return_email": "ops@example.com", "timeout_ms": 8000, "retry_max_attempts": 3, "retry_base_delay_ms": 300}}' | jq
+
+### Edit one of UrbaneBolt's own endpoints (auth / create / track / cancel); DELETE on it resets to the default
+curl -s -X PUT http://localhost:3000/api/v1/admin/couriers/urbanebolt/endpoints/track \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"path": "/services/tracking-pub/?awb={{awb_number}}", "method": "GET", "response": {"status_path": "data.status"}}' | jq
+
+### Delete a generic_rest courier
+curl -s -X DELETE http://localhost:3000/api/v1/admin/couriers/fixturecourier \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"

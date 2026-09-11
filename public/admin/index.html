@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Courier Platform — Admin</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div id="token-gate" class="gate">
+    <form id="token-form" class="gate-card">
+      <h1>Courier Platform Admin</h1>
+      <p class="muted">Enter the admin API token to continue. It's stored only in this browser.</p>
+      <input id="token-input" type="password" placeholder="Admin token" autocomplete="off" />
+      <button type="submit" class="primary">Continue</button>
+      <p id="token-error" class="error" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <h1>Courier Platform</h1>
+      <div class="topbar-actions">
+        <a href="#/new"><button type="button" class="primary">+ Add courier</button></a>
+        <button id="logout-btn" class="ghost">Change token</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- List view -->
+      <section id="view-list" class="view">
+        <div class="toolbar">
+          <div id="bulk-bar" class="bulk-bar" hidden>
+            <span id="bulk-count" class="muted"></span>
+            <button id="bulk-enable-btn" class="small">Enable selected</button>
+            <button id="bulk-disable-btn" class="small">Disable selected</button>
+          </div>
+          <button id="refresh-btn" class="ghost small">Refresh</button>
+        </div>
+
+        <div class="card">
+          <table class="couriers-table">
+            <thead>
+              <tr>
+                <th style="width:36px"><input type="checkbox" id="select-all" /></th>
+                <th>Courier</th>
+                <th>Partner ID</th>
+                <th>Kind</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="couriers-body">
+              <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Courier page: two tabs, details first, then endpoints one at a time -->
+      <section id="view-form" class="view" hidden>
+        <div class="page-header">
+          <a href="#/"><button type="button" class="back-btn ghost" aria-label="Back">←</button></a>
+          <h2 id="form-title">Add courier</h2>
+        </div>
+
+        <nav class="tabs" id="courier-tabs" hidden>
+          <a id="tab-link-details" class="tab" href="#/">Courier details</a>
+          <a id="tab-link-endpoints" class="tab" href="#/">Endpoints</a>
+        </nav>
+
+        <div id="readonly-note" class="readonly-note" hidden></div>
+
+        <!-- Tab 1 -->
+        <div id="tab-details">
+          <form id="courier-form">
+            <section>
+              <h3>Basics</h3>
+              <label>Partner ID (slug) <span class="hint">used as courier_partner, cannot change after creation</span>
+                <input name="id" id="field-id" required pattern="[a-z][a-z0-9_-]*" placeholder="e.g. delhivery" />
+              </label>
+              <label>Display name
+                <input name="display_name" required placeholder="e.g. Delhivery" />
+              </label>
+              <div id="connection-fields">
+                <label>Base URL
+                  <input name="base_url" type="url" required placeholder="https://api.example.com" />
+                </label>
+                <div class="grid-2">
+                  <label>Timeout (ms)<input name="timeout_ms" type="number" value="8000" /></label>
+                  <label>Retry attempts<input name="retry_max_attempts" type="number" value="3" /></label>
+                </div>
+              </div>
+              <div id="code-fields" hidden></div>
+              <p id="code-adapter-hint" class="hint" hidden>Edits here take effect immediately, no restart needed. The masked value is the saved secret -- leave it to keep it.</p>
+            </section>
+
+            <section id="auth-section">
+              <h3>Authentication</h3>
+              <label>Type
+                <select name="auth_type" id="auth-type">
+                  <option value="none">None</option>
+                  <option value="api_key_header">API key header</option>
+                  <option value="basic">HTTP Basic</option>
+                  <option value="bearer_static">Static bearer token</option>
+                  <option value="login_bearer">Login call → bearer token</option>
+                </select>
+              </label>
+
+              <div class="auth-fields" data-auth="api_key_header">
+                <div class="grid-2">
+                  <label>Header name<input name="auth_header_name" placeholder="X-API-Key" /></label>
+                  <label>API key<input name="auth_api_key" placeholder="secret key" /></label>
+                </div>
+              </div>
+              <div class="auth-fields" data-auth="basic">
+                <div class="grid-2">
+                  <label>Username<input name="auth_username" /></label>
+                  <label>Password<input name="auth_password" type="password" /></label>
+                </div>
+              </div>
+              <div class="auth-fields" data-auth="bearer_static">
+                <label>Token<input name="auth_token" placeholder="long-lived token" /></label>
+              </div>
+              <div class="auth-fields" data-auth="login_bearer">
+                <div class="grid-2">
+                  <label>Login path<input name="auth_login_path" placeholder="/auth/login" /></label>
+                  <label>Login method
+                    <select name="auth_login_method"><option>POST</option><option>GET</option></select>
+                  </label>
+                </div>
+                <div class="grid-2">
+                  <label>Username<input name="auth_login_username" /></label>
+                  <label>Password<input name="auth_login_password" type="password" /></label>
+                </div>
+                <label>Login body template (JSON) <span class="hint">use {{username}} / {{password}}</span>
+                  <textarea name="auth_login_body" rows="3">{"username": "{{username}}", "password": "{{password}}"}</textarea>
+                </label>
+                <div class="grid-2">
+                  <label>Token path in response <span class="hint">dot-path, e.g. data.token</span><input name="auth_token_path" placeholder="token" /></label>
+                  <label>Header name<input name="auth_bearer_header_name" value="Authorization" /></label>
+                </div>
+              </div>
+              <p class="hint" id="edit-secret-hint" hidden>The masked value is the saved secret. Leave it as-is to keep it, or type a new one to replace it.</p>
+            </section>
+
+            <div id="test-result" class="test-result" hidden></div>
+
+            <div class="form-actions">
+              <button type="button" id="test-connection-btn" class="ghost">Test connection</button>
+              <div>
+                <a href="#/"><button type="button" class="ghost">Cancel</button></a>
+                <button type="submit" class="primary" id="save-courier-btn">Save</button>
+              </div>
+            </div>
+            <p id="form-error" class="error" hidden></p>
+          </form>
+
+          <div id="code-endpoints" class="card code-endpoints" hidden>
+            <div class="section-head">
+              <div>
+                <h3>Endpoints</h3>
+                <p class="muted">Defined in this adapter's code (relative to the base URL above); shown here for reference.</p>
+              </div>
+            </div>
+            <div id="code-endpoint-list"></div>
+          </div>
+        </div>
+
+        <!-- Tab 2 -->
+        <div id="tab-endpoints" hidden>
+          <div class="card">
+            <div class="section-head">
+              <div>
+                <h3>Endpoints</h3>
+                <p class="muted">One URL per operation. Add them one at a time; each saves immediately.</p>
+              </div>
+              <button type="button" id="add-endpoint-btn" class="primary small">+ Add endpoint</button>
+            </div>
+            <div id="endpoint-list"></div>
+          </div>
+
+          <form id="endpoint-form" class="card endpoint-editor" hidden>
+            <h3 id="endpoint-form-title">Add endpoint</h3>
+            <div class="grid-2">
+              <label>Operation
+                <select name="ep_operation" id="ep-operation">
+                  <option value="create">Create order</option>
+                  <option value="track">Track shipment</option>
+                  <option value="cancel">Cancel order</option>
+                </select>
+              </label>
+              <label>Method
+                <select name="ep_method">
+                  <option>POST</option><option>GET</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                </select>
+              </label>
+            </div>
+            <label>Path <span class="hint" id="ep-path-hint"></span>
+              <input name="ep_path" required placeholder="/orders" />
+            </label>
+            <label id="ep-body-label">Request body template (JSON, optional) <span class="hint" id="ep-body-hint">reference unified fields, e.g. {"ref": "{{order_id}}", "weight": "{{package.weightKg}}"}</span>
+              <textarea name="ep_body" rows="4" placeholder="{}"></textarea>
+            </label>
+            <div class="grid-3" id="ep-response-fields">
+              <label data-for="auth">Token path in response<input name="ep_resp_token" placeholder="e.g. access or data.token" /></label>
+              <label data-for="create">courier_order_id path<input name="ep_resp_order_id" /></label>
+              <label data-for="create">AWB path<input name="ep_resp_awb" placeholder="required for create" /></label>
+              <label data-for="create track">Status path<input name="ep_resp_status" placeholder="e.g. status" /></label>
+            </div>
+            <div id="ep-status-map" class="ep-status-map" hidden>
+              <h4>Status mapping <span class="hint">what this endpoint's status field means in our terms</span></h4>
+              <div id="status-map-rows"></div>
+              <button type="button" id="add-status-row" class="ghost small" style="align-self:flex-start">+ Add mapping</button>
+            </div>
+            <div class="form-actions">
+              <span></span>
+              <div>
+                <button type="button" id="ep-cancel-btn" class="ghost">Cancel</button>
+                <button type="submit" class="primary">Save endpoint</button>
+              </div>
+            </div>
+            <p id="ep-error" class="error" hidden></p>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

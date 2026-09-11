@@ -1,0 +1,288 @@
+{
+  "info": {
+    "name": "Multi-Courier Integration Platform",
+    "description": "Complete API flow, runnable top to bottom (Postman Runner or `newman run postman_collection.json --env-var admin_token=...`). Set `base_url` and `admin_token`. Order IDs are generated per run so the flow is repeatable; each request asserts its expected status code. The UrbaneBolt requests hit the live UAT API and need working credentials configured in /admin (Gurugram -> Delhi pincodes are in UrbaneBolt's UAT serviceable list; Pune is not).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "admin_token", "value": "replace_with_ADMIN_API_TOKEN" },
+    { "key": "mock_order_id", "value": "" },
+    { "key": "ub_order_id", "value": "" },
+    { "key": "batch_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Health & readiness",
+      "item": [
+        {
+          "name": "Liveness",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/health" }
+        },
+        {
+          "name": "Readiness (checks the DB)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 ready', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('ready'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/ready" }
+        }
+      ]
+    },
+    {
+      "name": "2. Unified order API",
+      "item": [
+        {
+          "name": "List supported couriers",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 with couriers', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.supported_couriers).to.include('mockcourier'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/couriers" }
+        },
+        {
+          "name": "Create order (MockCourier)",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.collectionVariables.set('mock_order_id', 'ORD-' + Date.now());"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('201 CREATED with AWB', () => { pm.response.to.have.status(201); const d = pm.response.json().data; pm.expect(d.status).to.eql('CREATED'); pm.expect(d.awb_number).to.be.a('string'); });"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"order_id\": \"{{mock_order_id}}\",\n  \"courier_partner\": \"mockcourier\",\n  \"pickup_address\": {\"name\":\"Warehouse A\",\"phone\":\"9876543210\",\"email\":\"warehouse@example.com\",\"line1\":\"Plot 12, MIDC\",\"city\":\"Pune\",\"state\":\"MH\",\"pincode\":\"411001\"},\n  \"delivery_address\": {\"name\":\"Anuj\",\"phone\":\"9123456780\",\"email\":\"anuj@example.com\",\"line1\":\"221B Baker St\",\"city\":\"Mumbai\",\"state\":\"MH\",\"pincode\":\"400001\"},\n  \"package\": {\"weightKg\": 1.2, \"declaredValue\": 999},\n  \"payment_mode\": \"PREPAID\"\n}" }
+          }
+        },
+        {
+          "name": "Create same order again (idempotent, no second shipment)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('201 same order back', () => { pm.response.to.have.status(201); pm.expect(pm.response.json().data.order_id).to.eql(pm.collectionVariables.get('mock_order_id')); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"order_id\": \"{{mock_order_id}}\",\n  \"courier_partner\": \"mockcourier\",\n  \"pickup_address\": {\"name\":\"Warehouse A\",\"phone\":\"9876543210\",\"line1\":\"Plot 12, MIDC\",\"city\":\"Pune\",\"state\":\"MH\",\"pincode\":\"411001\"},\n  \"delivery_address\": {\"name\":\"Anuj\",\"phone\":\"9123456780\",\"line1\":\"221B Baker St\",\"city\":\"Mumbai\",\"state\":\"MH\",\"pincode\":\"400001\"},\n  \"package\": {\"weightKg\": 1.2, \"declaredValue\": 999}\n}" }
+          }
+        },
+        {
+          "name": "Track order (MockCourier)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 with history', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.history.length).to.be.at.least(1); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/orders/{{mock_order_id}}/track" }
+        },
+        {
+          "name": "Cancel order (MockCourier)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 CANCELLED', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('CANCELLED'); });"] } }],
+          "request": { "method": "POST", "url": "{{base_url}}/api/v1/orders/{{mock_order_id}}/cancel" }
+        },
+        {
+          "name": "Create order (UrbaneBolt, live UAT)",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.collectionVariables.set('ub_order_id', 'LIVE-' + Date.now());"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('201 CREATED with a real AWB', () => { pm.response.to.have.status(201); const d = pm.response.json().data; pm.expect(d.status).to.eql('CREATED'); pm.expect(d.awb_number).to.match(/^\\d+$/); });"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\n  \"order_id\": \"{{ub_order_id}}\",\n  \"courier_partner\": \"urbanebolt\",\n  \"pickup_address\": {\"name\":\"Acme Warehouse\",\"phone\":\"9876543210\",\"email\":\"ops@acme.test\",\"line1\":\"Plot 12, Udyog Vihar Phase 1\",\"city\":\"Gurugram\",\"state\":\"Haryana\",\"pincode\":\"122001\"},\n  \"delivery_address\": {\"name\":\"Ravi Kumar\",\"phone\":\"9123456780\",\"email\":\"ravi@example.test\",\"line1\":\"12 Janpath Road, Connaught Place\",\"city\":\"New Delhi\",\"state\":\"Delhi\",\"pincode\":\"110011\"},\n  \"package\": {\"weightKg\": 1.2, \"declaredValue\": 999, \"description\": \"T-shirt\"},\n  \"payment_mode\": \"PREPAID\"\n}" }
+          }
+        },
+        {
+          "name": "Track order (UrbaneBolt, live UAT)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 CREATED from live tracking', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('CREATED'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/orders/{{ub_order_id}}/track" }
+        },
+        {
+          "name": "Cancel order (UrbaneBolt, live UAT)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 CANCELLED', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.cancelled).to.eql(true); });"] } }],
+          "request": { "method": "POST", "url": "{{base_url}}/api/v1/orders/{{ub_order_id}}/cancel" }
+        },
+        {
+          "name": "Track after cancel (UrbaneBolt)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('CANCELLED reflected by courier', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.status).to.eql('CANCELLED'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/orders/{{ub_order_id}}/track" }
+        },
+        {
+          "name": "Unknown courier -> 400 with supported list",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('400 UNKNOWN_COURIER', () => { pm.response.to.have.status(400); const e = pm.response.json().error; pm.expect(e.code).to.eql('UNKNOWN_COURIER'); pm.expect(e.details.supported_couriers).to.be.an('array'); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\"order_id\":\"ORD-X\",\"courier_partner\":\"dhl\",\"pickup_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"delivery_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"package\":{\"weightKg\":1,\"declaredValue\":1}}" }
+          }
+        },
+        {
+          "name": "Malformed body -> 400 field-level errors",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('400 VALIDATION_ERROR with fields', () => { pm.response.to.have.status(400); const e = pm.response.json().error; pm.expect(e.code).to.eql('VALIDATION_ERROR'); pm.expect(e.details.fields.length).to.be.above(0); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\"order_id\":\"ORD-BAD\"}" }
+          }
+        },
+        {
+          "name": "Unknown order -> 404",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('404 ORDER_NOT_FOUND', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().error.code).to.eql('ORDER_NOT_FOUND'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/orders/does-not-exist/track" }
+        },
+        {
+          "name": "Bulk create (mixed couriers, one bad pincode) -> 202 + batch_id",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.collectionVariables.set('bulk_prefix', 'BULK-' + Date.now());"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('202 accepted with batch_id', () => { pm.response.to.have.status(202); const d = pm.response.json().data; pm.expect(d.accepted).to.eql(3); pm.collectionVariables.set('batch_id', d.batch_id); });"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders/bulk",
+            "body": { "mode": "raw", "raw": "{\n  \"orders\": [\n    {\"order_id\":\"{{bulk_prefix}}-1\",\"courier_partner\":\"mockcourier\",\"pickup_address\":{\"name\":\"WH\",\"phone\":\"9876543210\",\"line1\":\"Plot 1\",\"city\":\"Pune\",\"state\":\"MH\",\"pincode\":\"411001\"},\"delivery_address\":{\"name\":\"Cust\",\"phone\":\"9123456780\",\"line1\":\"Addr\",\"city\":\"Mumbai\",\"state\":\"MH\",\"pincode\":\"400001\"},\"package\":{\"weightKg\":1,\"declaredValue\":500}},\n    {\"order_id\":\"{{bulk_prefix}}-2\",\"courier_partner\":\"urbanebolt\",\"pickup_address\":{\"name\":\"Acme Warehouse\",\"phone\":\"9876543210\",\"email\":\"ops@acme.test\",\"line1\":\"Plot 12, Udyog Vihar Phase 1\",\"city\":\"Gurugram\",\"state\":\"Haryana\",\"pincode\":\"122001\"},\"delivery_address\":{\"name\":\"Ravi Kumar\",\"phone\":\"9123456780\",\"email\":\"ravi@example.test\",\"line1\":\"12 Janpath Road, Connaught Place\",\"city\":\"New Delhi\",\"state\":\"Delhi\",\"pincode\":\"110011\"},\"package\":{\"weightKg\":1,\"declaredValue\":500}},\n    {\"order_id\":\"{{bulk_prefix}}-3\",\"courier_partner\":\"urbanebolt\",\"pickup_address\":{\"name\":\"Acme Warehouse\",\"phone\":\"9876543210\",\"email\":\"ops@acme.test\",\"line1\":\"Plot 12, Udyog Vihar Phase 1\",\"city\":\"Gurugram\",\"state\":\"Haryana\",\"pincode\":\"122001\"},\"delivery_address\":{\"name\":\"Ravi Kumar\",\"phone\":\"9123456780\",\"email\":\"ravi@example.test\",\"line1\":\"12 Janpath Road, Connaught Place\",\"city\":\"Pune\",\"state\":\"MH\",\"pincode\":\"411001\"},\"package\":{\"weightKg\":1,\"declaredValue\":500}}\n  ]\n}" }
+          }
+        },
+        {
+          "name": "Get batch status (poll until COMPLETED)",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["// give the background worker pool a moment on the first poll", "setTimeout(() => {}, 4000);"] } },
+            { "listen": "test", "script": { "exec": ["const d = pm.response.json().data;", "pm.test('200 with per-order results', () => { pm.response.to.have.status(200); pm.expect(d.results.length).to.eql(3); });", "if (d.status !== 'COMPLETED') { postman.setNextRequest('Get batch status (poll until COMPLETED)'); } else { pm.test('partial success reported per order', () => { pm.expect(d.succeeded + d.failed).to.eql(3); pm.expect(d.results.find(r => r.order_id.endsWith('-3')).success).to.eql(false); }); }"] } }
+          ],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/orders/bulk/{{batch_id}}" }
+        },
+        {
+          "name": "Cancel the live bulk shipment (cleanup)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": { "method": "POST", "url": "{{base_url}}/api/v1/orders/{{bulk_prefix}}-2/cancel" }
+        }
+      ]
+    },
+    {
+      "name": "3. Admin API (courier management)",
+      "item": [
+        {
+          "name": "No token -> 401",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('401 UNAUTHORIZED', () => { pm.response.to.have.status(401); pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'); });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/admin/couriers" }
+        },
+        {
+          "name": "List couriers",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200, secrets masked', () => { pm.response.to.have.status(200); const ub = pm.response.json().data.find(c => c.id === 'urbanebolt'); pm.expect(ub.config.password).to.eql('••••••••'); });"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }], "url": "{{base_url}}/api/v1/admin/couriers" }
+        },
+        {
+          "name": "Get one courier (UrbaneBolt: fields + endpoints)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 coded adapter with admin fields', () => { pm.response.to.have.status(200); const d = pm.response.json().data; pm.expect(d.kind).to.eql('code'); pm.expect(d.fields).to.be.an('array'); pm.expect(d.endpoint_operations).to.include('track'); });"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }], "url": "{{base_url}}/api/v1/admin/couriers/urbanebolt" }
+        },
+        {
+          "name": "Rename a courier (display name only)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 renamed', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.display_name).to.eql('MockCourier'); });"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/mockcourier",
+            "body": { "mode": "raw", "raw": "{\"display_name\": \"MockCourier\"}" }
+          }
+        },
+        {
+          "name": "Disable a courier",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 disabled', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.enabled).to.eql(false); });"] } }],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/mockcourier/enable",
+            "body": { "mode": "raw", "raw": "{\"enabled\": false}" }
+          }
+        },
+        {
+          "name": "Order for a disabled courier -> 400 COURIER_DISABLED",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('400 COURIER_DISABLED', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.code).to.eql('COURIER_DISABLED'); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\"order_id\":\"ORD-DISABLED\",\"courier_partner\":\"mockcourier\",\"pickup_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"delivery_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"package\":{\"weightKg\":1,\"declaredValue\":1}}" }
+          }
+        },
+        {
+          "name": "Bulk enable couriers",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 all enabled', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.every(c => c.enabled)).to.eql(true); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/bulk-enable",
+            "body": { "mode": "raw", "raw": "{\"ids\": [\"mockcourier\", \"urbanebolt\"], \"enabled\": true}" }
+          }
+        },
+        {
+          "name": "Disabling every courier -> 400 (one must stay active)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('400 guardrail', () => { pm.response.to.have.status(400); pm.expect(pm.response.json().error.message).to.match(/at least one courier/i); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/bulk-enable",
+            "body": { "mode": "raw", "raw": "{\"ids\": [\"mockcourier\", \"urbanebolt\"], \"enabled\": false}" }
+          }
+        },
+        {
+          "name": "Register a new courier with no code (basics + auth only)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('201 created with no endpoints yet', () => { pm.response.to.have.status(201); const d = pm.response.json().data; pm.expect(d.kind).to.eql('generic_rest'); pm.expect(d.config.endpoints).to.eql({}); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers",
+            "body": { "mode": "raw", "raw": "{\n  \"id\": \"postmancourier\",\n  \"display_name\": \"Postman Courier\",\n  \"config\": {\n    \"base_url\": \"http://127.0.0.1:64644\",\n    \"auth\": {\"type\": \"api_key_header\", \"header_name\": \"X-Api-Key\", \"api_key\": \"fixture-secret-key\"}\n  }\n}" }
+          }
+        },
+        {
+          "name": "Order before any endpoint exists -> 502 COURIER_MISCONFIGURED",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('502 COURIER_MISCONFIGURED', () => { pm.response.to.have.status(502); pm.expect(pm.response.json().error.code).to.eql('COURIER_MISCONFIGURED'); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/orders",
+            "body": { "mode": "raw", "raw": "{\"order_id\":\"ORD-NOEP-{{$timestamp}}\",\"courier_partner\":\"postmancourier\",\"pickup_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"delivery_address\":{\"name\":\"a\",\"phone\":\"9876543210\",\"line1\":\"a\",\"city\":\"a\",\"state\":\"a\",\"pincode\":\"1234\"},\"package\":{\"weightKg\":1,\"declaredValue\":1}}" }
+          }
+        },
+        {
+          "name": "Add the create endpoint (body template + response mapping + status map)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 endpoint saved', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.config.endpoints.create.path).to.eql('/shipments'); });"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/postmancourier/endpoints/create",
+            "body": { "mode": "raw", "raw": "{\"path\": \"/shipments\", \"method\": \"POST\", \"body_template\": {\"ref\": \"{{order_id}}\", \"weight\": \"{{package.weightKg}}\"}, \"response\": {\"courier_order_id_path\": \"id\", \"awb_path\": \"tracking\", \"status_path\": \"state\"}, \"status_map\": {\"new\": \"CREATED\"}}" }
+          }
+        },
+        {
+          "name": "Add the track endpoint",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200', () => pm.response.to.have.status(200));"] } }],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/postmancourier/endpoints/track",
+            "body": { "mode": "raw", "raw": "{\"path\": \"/shipments/{{courier_order_id}}\", \"method\": \"GET\", \"response\": {\"status_path\": \"state\"}, \"status_map\": {\"in_transit\": \"IN_TRANSIT\", \"voided\": \"CANCELLED\"}}" }
+          }
+        },
+        {
+          "name": "Remove an endpoint",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200, track gone', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data.config.endpoints.track).to.be.undefined; });"] } }],
+          "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }], "url": "{{base_url}}/api/v1/admin/couriers/postmancourier/endpoints/track" }
+        },
+        {
+          "name": "Test a courier config before saving it",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('200 with ok flag', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().data).to.have.property('ok'); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/api/v1/admin/couriers/test",
+            "body": { "mode": "raw", "raw": "{\"id\": \"urbanebolt\", \"config\": {\"base_url\": \"https://uat.urbanebolt.in/api/v1\", \"username\": \"info@urbanebolt.com\", \"password\": \"••••••••\", \"customer_code\": \"UEBCUS0008\", \"default_service_type\": \"SDD\", \"default_return_email\": \"integration@example.com\", \"timeout_ms\": 8000, \"retry_max_attempts\": 3, \"retry_base_delay_ms\": 300}}" }
+          }
+        },
+        {
+          "name": "Delete the courier (soft delete, gone from the app)",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('204', () => pm.response.to.have.status(204));"] } }],
+          "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }], "url": "{{base_url}}/api/v1/admin/couriers/postmancourier" }
+        },
+        {
+          "name": "Deleted courier is gone -> 404",
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('404', () => pm.response.to.have.status(404));"] } }],
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{admin_token}}" }], "url": "{{base_url}}/api/v1/admin/couriers/postmancourier" }
+        }
+      ]
+    }
+  ]
+}
